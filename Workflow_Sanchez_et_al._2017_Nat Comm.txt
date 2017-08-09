@@ -1,0 +1,1476 @@
+###
+# DISCLAIMER:
+# These were the workflows for solving several bioinformatic analysis for Sanchez et al. (2017) Nat Comm.
+# It used standart open-source softwares in linux command-line, and custom-made phyton scripts (I kept here the original names of the phyton script's files to match my records)
+# It also involved some manual organization of files, manual assesment of results and manual processing to reach final result (e.g.sequence reconstruction).
+# Although it solved the problems faced at the time, note that this is a begginner's code, as I'm not a professional bioinformatician or data scientist.
+# As such, it may probably look overly complicated; and other more advanced solutions are likely simpler or more effective.
+# The workflow also display some historical contingencies, as I was learning while doing.
+# None of this work would be possible without the colaboration with Dr. Herve Gaubert, 
+# and the kind bioinformatics support of Varodom Charoensawan, Hugo Tavares, Jeremy Gruel, Hajk-Georg Drost, Anna Gogleva and Yassin Refahi. 
+#
+# Dr. Diego H. Sanchez (diego.sanchez@slcu.cam.ac.uk)
+###
+
+#################################################################################################################################################
+# A) Workflow for LTR reconstruction of ONSEN insertions in nrpd1-3 (example for nrpd1 2L plant from Gubert. et al, 2017)
+#################################################################################################################################################
+
+#########
+STEP 1
+#########
+# Use python script to extend areas around insertion poins 1000 bp (since mean library fragmant size was around ~350 bp, I estimated that 1000 bp would recover all possible informative reads)
+# For this I input a .txt file with genomic coordinates of insertions from data reported in Gaubert et al. (2017) Genetics (chromosome, start, end; file name:input_2L.txt) 
+
+#FILE:	input text extend strands and generates new bed.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+
+start_time=time.time() # To tell de time it take to process
+
+# Files&path
+InBEDFile = "input_2L.txt"
+OutBEDFile = "insertion_points_2L_extended.bed"
+path = "~/PATH/"     
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (filename):   
+    with open ("%s%s" %(path,filename), 'r') as myfile: # opens input file  
+        count=sum(1 for line in myfile)       
+    return count   
+
+############
+### MAIN ###
+############
+
+# Count lines in files
+counts_bed = CountLines (InBEDFile)
+print 'Number of lines in BED file: ', counts_bed, "--- %s minutes run ---" %((time.time()-start_time)/60)   
+
+# Input data from .bed in matrix
+input_bed_handle = open("%s%s" %(path,InBEDFile), "r") # opens the file to be written
+output_handle = open("%s%s" %(path,OutBEDFile), "w") # opens the file to be written 
+
+count=0
+for line in input_bed_handle:
+    
+    chromosome, start, end = line.strip("\n").split('\t')
+    start_=int(start)
+    end_=int(end)
+    if start_>end_:
+        end=start_
+        start=end_
+    print start, end,
+    new_start=int(start)-1000; new_end=int(end)+1000 # extends 1000 bp the genomic coordinate in the corresponding strands
+
+    name = chromosome+':'+str(new_start)+'-'+str(new_end)
+    print name 
+            
+    out_line = [chromosome, '\t', str(new_start), '\t', str(new_end), '\t', name, '\n'] # generates de components of .bed4 file
+    for item in out_line: 
+        output_handle.write(item) # Writing each component to a new .bed4 format                     
+  
+input_bed_handle.close()                                   
+output_handle.close()
+    
+counts_bed = CountLines (OutBEDFile) # check content of the OutBEDFile
+print 'Number of lines in new BED file: ', counts_bed, "--- %s minutes run ---" %((time.time()-start_time)/60)  
+    
+# END  
+print 'file parsed in         ', "--- %s minutes run ---" %((time.time()-start_time)/60)   
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#########
+STEP 2
+#########
+
+# Use phyton script to recover NGS reads around each ONSEN new insertion point; but only those having mapped read/unmapped mate.
+# Most input files were generated in Gaubert et al. (2017) Genetics, when finding the genomic coordinates of new ONSEN insertions.
+# The script will loop around each extended new position from previous step, retriving the mapping reads.
+# For each new insertion, the script will generate for each position: (i) a .sam file with the NGS reads but only those having mapped read/unmapped mate, 
+# (ii) a report with the name of reads recovered from this .sam, and (iii) two fasta files with the sequences of these,
+# obtained from the left or right LTRs, which were used to reconstruct the LTR's sequence of each new insertion (this is possible becuase both 5' and 3' LTRs are identical in new insertions).
+# Unintendently, these data also allows recognizing the orientation of the new insertion.
+# NOTE: script uses Numpy matrices to store information in memory, avoiding looping around files which is a far more time-consuming process.
+# However, this solution may not work if available memory is limited. Also, the function 'samtools view' requires an index of the .bam file
+
+# Prepare an index and a .bed file from .bam mapping file (obtained in Gaubert et al. (2017) Genetics); mapping reads to an ONSEN-masked genome.
+
+$samtools index 2L_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_rmdup_picard.bam &
+$bamToBed -i 2L_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_rmdup_picard.bam > 2L_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_rmdup_picard.bed &  
+
+# Run python script
+
+#FILE:	Modif_Analysis_1xsam_1xbed_1xfasta_ONSEN_reads_around_each_coordinate_for_commandline_2Lsample.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+import numpy as np
+from collections import Counter
+from Bio import SeqIO
+from Bio.Seq import Seq
+import subprocess
+
+start_time=time.time() # to tell de time it take to process
+
+# to run in command line: $python Modif_Analysis_1xsam_1xbed_1xfasta_ONSEN_reads_around_each_coordinate_for_commandline_2Lsample.py > log_analysis.txt &
+
+# Path
+path = "~/PATH/" 
+
+# Files 
+MappingFile_bam = "2L_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_rmdup_picard.bam" # mapped reads to ONSEN masked genome, from Gaubert et al. (2017) Genetics
+MappingFile_bed = "2L_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_rmdup_picard.bed" # obtained from previous .bam file
+
+InputBEDFile = "insertion_points_2L_extended.bed" # obtained in previous step
+FilenameSAM = "Reads_2L_GenomeUnmapped_verysensitive_fasta_ONSEN_sorted_MappedtoONSEN.sam" # .sam file with reads mapping to ONSEN, from Gaubert et al. (2017) Genetics 
+FastaIn = "Reads_2L_GenomeUnmapped.fasta" # .fasta with sequence reads, from Gaubert et al. (2017) Genetics
+
+d_type = 'a48' # max lenght of NGS read name, in number of characters, for matrix
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (filename):
+    
+    with open ("%s%s" %(path,filename), 'r') as myfile: # opens input file  
+        count=sum(1 for line in myfile)       
+    return count  
+  
+################################################################################
+###define fx to run samtools view in commandline 
+################################################################################
+def sam_view (InFile,OutFile,coordinates):
+    p = subprocess.Popen(["samtools view -f 8 -F 4 -o %s%s %s%s %s" %(path,OutFile,path,InFile,coordinates)], shell=True) # subprocess.call 
+    p.wait()
+    return OutFile # returns name of the OutFile for report
+
+################################################################################
+### defines fx ParseBED and stores strand data
+################################################################################
+def ParseBED (input_file, number_lines):
+    BED_Matrix = np.array(range(number_lines), dtype=d_type)     
+    STRAND_Matrix = np.array(range(number_lines), dtype='a2') # generates a matrix with strings of at most d_type characters, to store NGS read names   
+    i=0 # counts position in matrix   
+    for record in input_file: 
+        if record.startswith("@"): continue # historical contingency; this just disregards a SAM header, just in case   
+        else:                      
+            line = record.strip().split("\t")       
+            name_sam = line[3]; name_sam=name_sam.replace("/1",""); name_sam=name_sam.replace("/2","") # line[3] of .bed is read name       
+            BED_Matrix[i] = name_sam   
+            STRAND_Matrix[i] = line [5] # stores strand data from line [5]
+            i +=1     
+    return BED_Matrix, STRAND_Matrix
+
+################################################################################
+### defines fx ParseSAM
+################################################################################
+def ParseSAM (input_file, number_lines):
+    SAM_Matrix = np.array(range(number_lines), dtype=d_type) # generates a matrix with strings of at most d_type characters, to store NGS read names   
+    i=0 # counts position in matrix   
+    for record in input_file: 
+        if record.startswith("@"): continue # disregards SAM header   
+        else:                      
+            line = record.strip().split("\t")       
+            name_sam = line[0]; name_sam=name_sam.replace("/1",""); name_sam=name_sam.replace("/2","") # line[0] of .sam is NGS read name       
+            SAM_Matrix[i] = name_sam   
+            i +=1
+    SAM_Matrix = np.unique(SAM_Matrix) # just in case, removes duplicated reads and sorts     
+    return SAM_Matrix
+    
+############
+### MAIN ###
+############
+
+counts_3 = CountLines (MappingFile_bed); print 'File BED count: ', counts_3 
+input_handle_3 = open("%s%s" %(path,MappingFile_bed), "r") # opens .bed file
+Data_File3, Strand_File3 = ParseBED (input_handle_3, counts_3) # appplies ParseBED fx
+input_handle_3.close()
+print "Strand data input from BED mapping file in --- %s minutes run ---" %((time.time()-start_time)/60)
+
+# Generates matrix with names of all reads mapping to ONSEN
+counts_2 = CountLines (FilenameSAM); print 'File SAM count: ', counts_2 
+input_handle_2 = open("%s%s" %(path,FilenameSAM), "r") # opens .sam file
+Data_File2 = ParseSAM (input_handle_2, counts_2) # appplies ParseSAM fx
+input_handle_2.close()
+print "SAM with mapped reads to ONSEN parsed in --- %s minutes run ---" %((time.time()-start_time)/60)
+
+# Parse .bed file
+input_handle_bed = open("%s%s" %(path,InputBEDFile), "r") # opens .bed file
+for record in input_handle_bed:  
+                        
+    Chr, start,end, coordinates_bed = record.strip("\n").split("\t") # coordinates is the name in .bed file   
+    name_bed = str(Chr)+'_'+str(start)+'_'+str(end) # generates a name for the out files 
+            
+    ReadsFile = "2L_reads_around_insertion_%s.sam" %name_bed # .this will be the .sam with results of reads 
+            
+    # Recover NGS reads with mapped read/unmapped mate around particular insertion point 
+    sam_view (MappingFile_bam,ReadsFile,coordinates_bed) 
+    print "Recovered reads around", coordinates_bed, "in --- %s minutes run ---" %((time.time()-start_time)/60)   
+            
+    # Parse the ReadsFile .sam, to get reads names around insertion point
+    counts_1 = CountLines (ReadsFile); print 'File .sam count: ', counts_1 
+    input_handle_1 = open("%s%s" %(path,ReadsFile), "r") # opens .sam file
+    Data_File1 = ParseSAM (input_handle_1, counts_1) # appplies ParseSAM, recover read names
+    input_handle_1.close()
+    print "file ", ReadsFile, " parsed in --- %s minutes run ---" %((time.time()-start_time)/60)  
+            
+    # Concatenate matrixes & match data
+    Final_Matrix = np.concatenate((Data_File1,Data_File2), axis=0)
+    count=0
+    Shared_array = np.array(([item for item,count in Counter(Final_Matrix).iteritems() if count > 1]), dtype=d_type)
+    Shared_array.sort()       
+    print "Total reads match for ", ReadsFile, "is count", len(Shared_array), " in time: --- %s minutes run ---" %((time.time()-start_time)/60)     
+             
+    # Write report
+    ReportFile = "report_3L_reads_around_insertion_%s.txt" %name_bed  
+    output_handle = open("%s%s" %(path,ReportFile), "w") # opens ReportFile to be written
+    for out_line in Shared_array:        
+        output_handle.write("%s\n" %out_line) # writes .sam line plus \n    
+    output_handle.close() 
+    print "Report file ", ReportFile, " generated in --- %s minutes run ---" %((time.time()-start_time)/60)  
+            
+    # Input .txt data in matrix
+    counts_text = CountLines (ReportFile)
+    print "Number of lines in report file: ", counts_text, "--- %s minutes run ---" %((time.time()-start_time)/60)  
+    
+    Text_List = np.zeros( (counts_text), dtype=d_type) # make matrix with counts_text items at most
+    input_text_handle = open("%s%s" %(path,ReportFile), "r") # opens ReportFile
+    count=0
+    for record in input_text_handle:   
+        record = record.strip()
+        record = record.strip("\t")   
+        record = record.strip("\n")
+        Text_List[count] = record                              
+        count +=1 
+    input_text_handle.close()    
+    Text_List.sort()
+    print "text data in matrix     ", "--- %s minutes run ---" %((time.time()-start_time)/60)
+            
+    # Loop .txt data in the input fasta file
+    ReadsFastaFile_left = "Fasta_reads_2L_reads_around_insertion_%s_left.fasta" %name_bed
+    ReadsFastaFile_right = "Fasta_reads_2L_reads_around_insertion_%s_right.fasta" %name_bed
+    input_handle = open("%s%s" %(path,FastaIn), "rU")  #opens .fastq file
+    output_handle_left = open("%s%s" %(path,ReadsFastaFile_left), "w") # opens the file to be written LEFT for + strand
+    output_handle_right = open("%s%s" %(path,ReadsFastaFile_right), "w") # opens the file to be written  RIGH for - strand
+            
+    count=0
+    for record in SeqIO.parse(input_handle, "fasta") :
+        if record.id in Text_List:
+            count+=1
+
+            index_data = np.where(Data_File3 == record.id) # find NGS read's position in matrix, to then recognize the strand stored in the strand matrix
+            print index_data,
+            index_strand = index_data[0][0]
+            read_strand = Strand_File3[index_strand]
+
+            if read_strand == '+': 
+                SeqIO.write(record, output_handle_left, "fasta")
+            if read_strand == '-': 
+                SeqIO.write(record, output_handle_right, "fasta")
+            
+    input_handle.close()
+    output_handle_left.close()
+    output_handle_right.close()
+    print "number of output in fasta Files is: ", count
+                                                        
+### END  
+print "Process time required: --- %s minutes run ---" %((time.time()-start_time)/60)  
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#########
+STEP 3
+#########
+# Use out .fasta files to reconstruct new ONSEN LTR sequence in each insertion point; we used Genious software.
+
+
+
+#################################################################################################################################################
+# B) Workflow for estimating transcript levels with specific sequence 'adresses', from RNAseq data
+#################################################################################################################################################
+
+#########
+STEP 1
+#########
+# Use python workflow to recover NGS reads mapping to the genes of interest or ONSEN. Example is shown for housekeeping genes and stress genes.
+# For this I used a .bed file with genomic coordinates and the function samtools view, on the TopHat mapping file .bam for each sample 
+
+#FILE:	Workflow_recover_reads_TOPHAT_DUPLICATED_housekeepingANDstress_genes_SAMPLE.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+start_time=time.time() # to tell de time it take to process
+import subprocess
+
+# run in linux command line: $python Workflow_recover_reads_housekeepingANDstress_genes.py > log_recover_reads_housekeepingANDstress_genes.txt &
+
+# path
+
+path_input_sample = "~/PATH/"  
+
+############
+### MAIN ###
+############
+
+# Recover reads
+InFile = "RNA_SAMPLE_tophat_TAIR10_sorted.bam"
+OutFile = "housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10.bam"
+
+with open ("%s%s" %(path_input_sample,OutFile), 'w') as myfile:
+        p = subprocess.Popen(["samtools view -b -h -F4 %s%s -L housekeeping_stress_genes.txt" %(path_input_sample,InFile)], shell=True, stdout = myfile) #subprocess.call(["samtools view -bS %s%s" %(path,MappingFile)], shell=True ) 
+        p.wait()
+        myfile.flush()
+print "Recovered reads in: ",  "--- %s minutes run ---" %((time.time()-start_time)/60)
+
+# Sort
+InFile = "housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10.bam"
+OutFile = "housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10_sorted.bam"
+
+p = subprocess.Popen(["samtools sort %s%s -o %s%s" %(path_input_sample,InFile,path_input_sample,OutFile)], shell=True) 
+p.wait()
+print "Sorted BAM file in: ",  "--- %s minutes run ---" %((time.time()-start_time)/60)
+
+# Index just in case
+InFile = "housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10_sorted.bam"
+
+p = subprocess.Popen(["samtools index %s%s" %(path_input_sample,InFile)], shell=True) 
+p.wait()
+print "Index generated in: ",  "--- %s minutes run ---" %((time.time()-start_time)/60)
+
+# Generate fasq from bam
+InFile = "housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10_sorted.bam"
+OutFile = "housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10_sorted.fastq"
+
+p = subprocess.Popen(["bedtools bamtofastq -i %s%s -fq %s%s" %(path_input_sample,InFile,path_input_sample,OutFile)], shell=True) 
+p.wait()
+print "Generated .fastq file in: --- %s minutes run ---" %((time.time()-start_time)/60)
+
+# END 
+print "Process time required: --- %s minutes run ---" %((time.time()-start_time)/60)  
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Generate a .fasta file from .fastq file in command line
+$awk 'BEGIN{P=1}{if(P==1||P==2){gsub(/^[@]/,">");print}; if(P==4)P=0; P++}' housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10_sorted.fastq > housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10_sorted.fasta &
+
+#########
+STEP 2
+#########
+# Use python script which generates a report of counts per target feature, based on perfect string matching.
+# It requires a .fasta file with the adresses and a .fasta file with the NGS reads
+
+#FILE:	Search_for_housekeepingANDstress_noMULTI_adresses_counter_itteritem_SAMPLE.py	
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+from collections import Counter
+from operator import itemgetter
+
+#THREADS = 6 # number of cores to paralelize analisys if necesarry; will require slight modification of code for processing Dummy_List = map(Busqueda, Genome_Dict.items());see below.
+start_time=time.time() # to tell de time it take to process 
+
+# Files & path 
+
+InputFasta_Genome = "housekeeping_stress_adress.txt" # this is fasta with the adresses of each gene
+InputFasta_NGS = "housekeepingANDstress_genes_in_RNA_SAMPLE_tophat_TAIR10_sorted.fasta" # this is the fasta with the NGS reads from SAMPLE
+
+Out_Report = "Report_housekeepingANDstress_RNA_SAMPLE_tophat_adress.txt" # this is the .txt outfile with the count of hits in each gene
+
+path = "~/PATH/"
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (pathy,filename):
+    
+    with open ("%s%s" %(pathy,filename), 'r') as myfile: # opens input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+
+################################################################################
+### Define Busqueda fx; if required enables paralelization for faster string matching
+################################################################################
+def Busqueda (key_value): # data in dictionary enters a tuple (key,value)   
+    Tuple_List = [] 
+    item_genome = Seq.Seq(key_value[1])
+    rev_item_genome = item_genome.reverse_complement()
+    for record_ngs in NGS_Dict:                  
+        seq_ngs = Seq.Seq(str(NGS_Dict[record_ngs]))                                                  
+        if str(item_genome) in seq_ngs: 
+            Tuple_List.append ((str(key_value[0]), str(record_ngs)))   
+        if str(rev_item_genome) in seq_ngs:
+            Tuple_List.append ((str(key_value[0]), str(record_ngs))) # if reverse compliment shows the match, then writes the reverse complement of the NGS sequence                                 
+    return set(Tuple_List) # returns a list of tuples. Also returns [] if there was no match. This is handled later with a Final_List.extend() 
+
+############
+### MAIN ###
+############
+
+# Parse the recombination file
+counts = CountLines (path,InputFasta_Genome); print "Fasta file with adresses: ", counts, " counts"  
+counts = CountLines (path,InputFasta_NGS); print "Fasta file with NGS reads: ", counts, " counts"   
+              
+# Unpack adresses
+Genome_Dict ={} # Dict with genomic adresses
+input_handle_genome = open("%s%s" %(path,InputFasta_Genome), "rU") # opens .fasta file 
+for genome_item in SeqIO.parse(input_handle_genome, "fasta"):
+        Genome_Dict[genome_item.id] = str(genome_item.seq)
+input_handle_genome.close()
+print "Genome sequences unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60) 
+
+# Unpack NGS reads
+NGS_Dict ={} # dict with NGS sequences
+ID_List = [] # list with the record.id, to find the reads/mate with same name
+input_handle_NGS = open("%s%s" %(path,InputFasta_NGS), "rU") # opens .fasta file 
+for NGS_item in SeqIO.parse(input_handle_NGS, "fasta"):
+    ID = str(NGS_item.id)+'/1' # rename the reads for the read/mate having the same read_name but different sequence; this accounts for recovering reads with samtools where they loose their read/mate info
+    if ID in ID_List: ID = str(NGS_item.id)+'/2'        
+    NGS_Dict[ID] = str(NGS_item.seq)
+    ID_List.append(ID)
+input_handle_NGS.close()
+print len (NGS_Dict), "is the number of NGS reads"
+print "NGS data unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60) 
+
+# Check if items of list are in adresses. This step is design to be paralelized if necesary.
+Final_List = []          
+Dummy_List = map(Busqueda, Genome_Dict.items()) # .items() of a dictionary generates a list of tuples (key,value)                   
+for items in Dummy_List: Final_List.extend(items) # transforms list of list of tuples in list of tuples      
+print len (Final_List),"is number of redundant sequences in Final List"
+print "Final List generated in time: --- %s minutes run ---" %((time.time()-start_time)/60)                                                               
+ 
+# Process the Final_List into NonTransient_List, with adresses showing more than one hit
+NonTransient_List = [] # store adresses ID with more than one hit, considering one hit as the basal noise level
+NonUnique_List = [] # will store adress,read data from FInal_List with those adreeses with more than one hit 
+for item,count in Counter(x for x,y in Final_List).iteritems():
+    if count>1: NonTransient_List.append(item) 
+
+# Make NonUnique_List from the Final_List, selecting for adresses showing more than one hit appended in NonTransient_List
+for adress,read in Final_List:
+    if adress in NonTransient_List:
+        NonUnique_List.append((adress,read))
+NonUnique_List = sorted(NonUnique_List, key=itemgetter(0)) # sorts list according to the 2nd element of tuple, which is the Genomic_ID
+print len (NonUnique_List),"is number of hits in NonUnique List"       
+print "NonUnique List generated in time: --- %s minutes run ---" %((time.time()-start_time)/60)  
+                                                                 
+# Write report with count number of NGS reads per adress
+output_handle = open("%s%s" %(path,Out_Report), "w") #opens the file to be written
+for item,count in Counter(x for x,y in NonUnique_List).iteritems(): # counts the adress ID as 'values' of a dictionary in NonUnique_List containing (adress_ID, NGS_ID)
+    print item, count
+    output_handle.write("%s\t%s\n" %(item,count))                                            
+output_handle.close()       
+
+# END  
+print "Total NGS reads match in time: --- %s minutes run ---" %((time.time()-start_time)/60)   
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# In the file "Report_housekeepingANDstress_RNA_SAMPLE_tophat_adress.txt" is a list of counts hitting the adress of each genes
+
+#########
+STEP 3
+#########
+# Manually generate a list of count per gene across samples and normalize to TopHat non-deduplicated mapped library size
+
+
+
+#################################################################################################################################################
+# C) Workflow for reavealing recombination in re-sequenced samples
+#################################################################################################################################################
+
+#########
+STEP 1
+#########
+# Generate virtual library of fragments containing all possible recombination products between ONSEN members
+# The input file FINAL_ONSEN_consensus_with_GAPs.txt was manually prepared and contains the consensus between ONSEN members, including GAPs, in FASTA format
+# The script retrieves a .fasta FINAL_first_round_recombinations_GAPs_145_1.fasta, a library of redundant fragments containing all possible recombination products
+# extend_ambiguous_dna and slidingWindow functions were taken from publically available sources
+
+#FILE:	New_version_ONSEN_Generate_recombination_sequences_145_1.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+from itertools import product
+from Bio.Alphabet import IUPAC
+
+start_time=time.time() # to tell de time it take to process
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta = "FINAL_ONSEN_consensus_with_GAPs.txt" # .fasta with manually prepared consensus sequence of ONSEN, with Ns
+InputFasta_genome = "TAIR10_chr_all.fas" # .fasta with A.thaliana genome
+OutFasta = "FINAL_first_round_recombinations_GAPs_145_1.fasta" # .fasta outfile with the name/sequences of recombination sequences
+
+WINSIZE = 145
+STEP = 1
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (pathy,filename):
+    
+    with open ("%s%s" %(pathy,filename), 'r') as myfile: # opens input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count 
+  
+################################################################################
+###define extend_ambiguous_dna fx
+################################################################################
+def extend_ambiguous_dna(sequencia):
+   """return list of all possible sequences given an ambiguous DNA input"""
+   """enter the sequence as a string"""
+   d = Seq.IUPAC.IUPACData.ambiguous_dna_values
+   r = []
+   for i in product(*[d[j] for j in sequencia]):
+      r.append("".join(i))
+   return r 
+
+################################################################################
+###define slidingWindow fx
+################################################################################
+def slidingWindow(sequence,winSize,step):
+    """Returns a generator that will iterate through
+    the defined chunks of input sequence.  Input sequence
+    must be iterable."""
+ 
+    # Verify the inputs
+    try: it = iter(sequence)
+    except TypeError:
+        raise Exception("**ERROR** sequence must be iterable.")
+    if not ((type(winSize) == type(0)) and (type(step) == type(0))):
+        raise Exception("**ERROR** type(winSize) and type(step) must be int.")
+    if step > winSize:
+        raise Exception("**ERROR** step must not be larger than winSize.")
+    if winSize > len(sequence):
+        raise Exception("**ERROR** winSize must not be larger than sequence length.")
+ 
+    # Pre-compute number of chunks to emit
+    numOfChunks = ((len(sequence)-winSize)/step)+1
+ 
+    # Do the work
+    for i in range(0,numOfChunks*step,step):
+        yield sequence[i:i+winSize]
+
+############
+### MAIN ###
+############
+
+counts = CountLines (path,InputFasta); print "Fist fasta file: ", counts, " counts" 
+counts = CountLines (path_genome,InputFasta_genome); print "Second fasta file: ", counts, " counts"  
+         
+# Unpack consensus seq data
+Consensus_Dict ={} # dict with consensus sequences
+input_handle_input = open("%s%s" %(path,InputFasta), "rU") # opens .fasta file
+
+for input_item in SeqIO.parse(input_handle_input, "fasta"):
+    if len(input_item.seq)>=WINSIZE: # check that there is no error in size
+        Consensus_Dict[input_item.id] = str(input_item.seq)
+input_handle_input.close()
+
+# Unpack genome
+Genome_Dict ={} # dict with genome sequences
+input_handle_genome = open("%s%s" %(path_genome,InputFasta_genome), "rU") # opens .fasta file 
+
+for genome_item in SeqIO.parse(input_handle_genome, "fasta"):
+        Genome_Dict[genome_item.id] = str(genome_item.seq)
+input_handle_genome.close()
+    
+# Check if putative recombination sequences ocurr in genome
+count = 0
+output_handle = open("%s%s" %(path,OutFasta), "w") # opens .fasta to be written
+
+for record_input in Consensus_Dict:
+        
+    for each_sequence in slidingWindow(Consensus_Dict[record_input],WINSIZE,STEP):
+    
+        recombination_list = extend_ambiguous_dna(str(each_sequence))
+        
+        # Check that the sequence doesnt exist in genome
+        for item in recombination_list:   
+            item_seq = Seq.Seq(item)
+            rev_item_seq = item_seq.reverse_complement()
+             
+            for record_genome in Genome_Dict:                  
+                seq_genome = Genome_Dict[record_genome]                       
+                if str(item_seq) in seq_genome or str(rev_item_seq) in seq_genome:
+                    print "one prescence!"
+                    break
+            else:
+                count=count+1; print count,
+                output_handle.write(">%s\n%s\n" %(count,item))  
+                                 
+output_handle.close() 
+
+# END  
+counts = CountLines (path,OutFasta); print "Output fasta with final: ", counts, " counts"  
+print "Total sequences generate:", count, "  in time: --- %s minutes run ---" %((time.time()-start_time)/60)        
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#########
+STEP 2
+#########
+# Remove redundancy in the library
+
+#FILE:	FINAL_Check_generation_recombinants_avoid_duplicates_GAPs_145_1.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+from itertools import product
+from Bio.Alphabet import IUPAC
+
+start_time=time.time() # to tell de time it take to process
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta = "FINAL_first_round_recombinations_GAPs_145_1.fasta" # .fasta from previous step
+OutFasta2 = "FINAL_putative_recombinations_GAPs_145_1.fasta" # final library
+
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (filename):
+    
+    with open ("%s%s" %(path,filename), 'r') as myfile: # opens input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+
+############
+### MAIN ###
+############
+
+# Unpack data
+counts = CountLines (InputFasta); print "First redundant library with recombination sequences: ", counts, " counts"  
+
+input_handle = open("%s%s" %(path,InputFasta), "rU") # opens .fasta file
+Check_Dict = {}
+
+for record in SeqIO.parse(input_handle, "fasta"):
+    Check_Dict [record.id] = str(record.seq)
+input_handle.close()
+print "Data in dictionary  in time: --- %s minutes run ---" %((time.time()-start_time)/60) 
+   
+# Check if recombinations are in recombination list      
+Black_List = [] # to keep track of those repeated sequences and avoid writing them
+output_handle = open("%s%s" %(path,OutFasta2), "w") # opens the file to be written
+input_handle = open("%s%s" %(path,InputFasta), "rU") # opens .fasta file
+count = 0
+count_yes = 0
+
+for record in SeqIO.parse(input_handle, "fasta"):
+    print record.id,
+    seq = str(record.seq)
+    repeat = "No"
+    for key in Check_Dict:
+        if seq == Check_Dict [key]:
+            if record.id == key:
+                print "present! record: ", record.id, " is key: ", key
+                continue
+            else:
+                Black_List.append(key) 
+                print "repeated!"
+                print record.id, seq
+                print key, Check_Dict [key]
+                repeat = "Yes"; count_yes +=1
+                break
+    if repeat == "No" and record.id not in Black_List:
+        count=count+1
+        SeqIO.write(record, output_handle, "fasta")
+            
+input_handle.close()
+output_handle.close()
+
+# END  
+counts = CountLines (OutFasta2); print "Final file with recombinants sequences: ", counts, " counts"  
+print "Total repeated sequences: ", count_yes 
+print "Total reads match: ", count, " in time: --- %s minutes run ---" %((time.time()-start_time)/60)              
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#########
+STEP 3
+#########
+# Search for ocurrence of virtual library sequences in ONSEN's mapped NGS reads
+
+
+#FILE:	MULTI_ONSEN_Search_recombination_GAPs_SAMPLE_145_1.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+import multiprocessing
+
+THREADS = 16 # number of cores to parelelize analisys
+start_time=time.time() # to tell de time it take to process 
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta_RecSeq = "FINAL_putative_recombinations_GAPs_145_1.fasta" # virtual library with putative recombination sequences
+InputFasta_Genome = "fasta_ONSEN.fa" # .fasta with sequences of ONSEN members
+InputFasta_NGS = "Reads_SAMPLE_TAIR10_chr_all_maskedONSEN_Unmapped_mapONSEN.fasta" # .fasta with the NGS reads from SAMPLE
+
+OutFasta_Reads = "FINAL_found_in_reads_SAMPLE_GAPs_145_1.fasta" # .fasta outfile with the name/sequences of the NGS reads with matching sequences to library
+OutFasta_Recomb = "FINAL_recombinations_found_GAPs_SAMPLE_145_1.fasta" # .fasta outfile with the recombinations from library having matching sequences to reads
+
+
+################################################################################
+###define CountLines fx to count the lines of a file 
+################################################################################
+def CountLines (pathy,filename):
+    
+    with open ("%s%s" %(pathy,filename), 'r') as myfile: # opens input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count  
+ 
+################################################################################
+### Define Busqueda fx, paralelization enabled
+################################################################################
+def Busqueda (key_value): # data from dictionary enters a tuple (key,value)   
+    Tuple_List = [] 
+    item_recseq = Seq.Seq(key_value[1])
+    rev_item_seq = item_recseq.reverse_complement()
+    for record_ngs in NGS_Dict:                  
+        seq_ngs = Seq.Seq(str(NGS_Dict[record_ngs])) 
+        rev_seq_ngs = seq_ngs.reverse_complement()                                                  
+        if str(item_recseq) in seq_ngs: 
+            Tuple_List.append ((str(key_value[0]), str(item_recseq), str(record_ngs),str(seq_ngs))) 
+        if str(rev_item_seq) in seq_ngs:
+            Tuple_List.append ((str(key_value[0]), str(item_recseq), str(record_ngs),str(rev_seq_ngs))) # if reverse compliment shows the match, then writes the reverse complement of the NGS sequence                                 
+    return Tuple_List # returns a list of tuples. Also returns [] if there was no match. This is handled later with a Final_List.extend()   
+
+############
+### MAIN ###
+############
+
+# Count files
+counts = CountLines (path,InputFasta_RecSeq); print "Fist .fasta file with library sequences: ", counts, " counts" 
+counts = CountLines (path,InputFasta_Genome); print "Second .fasta file with ONSEN sequences: ", counts, " counts"  
+counts = CountLines (path,InputFasta_NGS); print "Third .fasta file with NGS reads: ", counts, " counts"   
+              
+# Unpack library sequences
+RecSeq_Dict ={} # dict with library sequences
+input_handle_RecSeq = open("%s%s" %(path,InputFasta_RecSeq), "rU") # opens .fasta file
+for input_item in SeqIO.parse(input_handle_RecSeq, "fasta"):
+        RecSeq_Dict[input_item.id] = str(input_item.seq)
+input_handle_RecSeq.close()
+print len (RecSeq_Dict), "is the number of library sequences"
+print "Recombination Sequences unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60) 
+
+# Unpack ONSEN sequences
+Genome_Dict ={} # dict with ONSEN sequences
+input_handle_genome = open("%s%s" %(path,InputFasta_Genome), "rU") # opens .fasta file 
+for genome_item in SeqIO.parse(input_handle_genome, "fasta"):
+        Genome_Dict[genome_item.id] = str(genome_item.seq)
+input_handle_genome.close()
+print "ONSEN sequences unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60) 
+
+# Unpack NGS reads
+NGS_Dict ={} # dict with NGS sequences
+ID_List = [] # list with the record.id, to find the reads/mate with same name
+input_handle_NGS = open("%s%s" %(path,InputFasta_NGS), "rU") # opens .fasta file 
+for NGS_item in SeqIO.parse(input_handle_NGS, "fasta"):
+    ID = str(NGS_item.id)+'/1' # rename reads; this accounts for recovering reads with samtools
+    if ID in ID_List: ID = str(NGS_item.id)+'/2'        
+    NGS_Dict[ID] = str(NGS_item.seq)
+    ID_List.append(ID)
+input_handle_NGS.close()
+print len (NGS_Dict), "is the number of NGS reads"
+print "NGS data unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60) 
+
+# Re-check if library sequences are in ONSEN, just in case
+Black_List = [] 
+for record_input in RecSeq_Dict:                                                        
+    seq_input = str(RecSeq_Dict[record_input])    
+    for record_genome in Genome_Dict:                                                     
+        seq_genome = Seq.Seq(str(Genome_Dict[record_genome]))                  
+        rev_seq_genome = str(seq_genome.reverse_complement()) # rev_seq_genome is the reverse-complement            
+        if seq_input in seq_genome or seq_input in rev_seq_genome: # test if sequence is ONSEN sequence
+            print record_input.id, " is a genomic sequence"       
+            Black_List.append(record_input) # stores ID or recombination sequence in a Black_List
+# NOTE: Black_list should be always empty if the library was checked agains genome assembly
+print len (Black_List), "is the number of library sequences present in ONSEN"
+print "Check if sequences were in genome, in time: --- %s minutes run ---" %((time.time()-start_time)/60)   
+
+# Check if items of recombination list are in genome
+# Paralelize analysis
+if __name__ == '__main__':
+    Final_List = [] 
+    p = multiprocessing.Pool(THREADS)           
+    Dummy_List = p.map(Busqueda, RecSeq_Dict.items()) # .items() of a dictionary generates a list of tuples (key,value)
+    p.close()
+    p.join()               
+    for items in Dummy_List: Final_List.extend(items) # transforms list of list of tuples in list of tuples      
+    print len (Final_List),"is number of sequences in Final List"
+    print "Paralelized and Final List generated in time: --- %s minutes run ---" %((time.time()-start_time)/60)                                                               
+        
+# Write results
+List_Reads = [] # to append NGS ID and avoid reporting again
+List_Recomb = [] # to append library sequences and avoid reporting again
+count=0 # to count number of reported non-redundant NGS reads, just in case
+output_handle_Reads = open("%s%s" %(path,OutFasta_Reads), "w") # opens file to be written, with NGS reads
+output_handle_Recomb = open("%s%s" %(path,OutFasta_Recomb), "w") # opens file to be written, with library sequences
+
+for tuple_item in Final_List: # Final_List is a list of tuples, each containing (RecSeq_ID, RecSeq_seq, NGS_ID, NGS_seq)
+    RecSeq_ID, RecSeq_seq, NGS_ID, NGS_seq = str(tuple_item[0]), str(tuple_item[1]), str(tuple_item[2]),str(tuple_item[3])  # unpack tuple   
+    if RecSeq_ID not in Black_List: # Black_List stored library sequences IDs if present in ONSEN sequences                              
+                if NGS_ID not in List_Reads:
+                    count+=1 
+                    List_Reads.append (NGS_ID) # when library seq ocurrs in NGS read, appends NGS read ID in List_Reads. Each read will thus be reported only once.
+                    output_handle_Reads.write (">%s\n%s\n" %(NGS_ID, NGS_seq)) # write NGS read to outfile   
+                if RecSeq_ID not in List_Recomb: # store library sequences with hits and write to outfile
+                    List_Recomb.append (RecSeq_ID)
+                    output_handle_Recomb.write (">%s\n%s\n" %(RecSeq_ID, RecSeq_seq))                
+output_handle_Reads.close() 
+output_handle_Recomb.close() 
+      
+# END 
+counts = CountLines (path,OutFasta_Reads); print "Outfile with NGS reads: ", counts, " counts"      
+counts = CountLines (path,OutFasta_Recomb); print "Outfile with recombination sequences: ", counts, " counts"
+print "Total NGS reads match: ", count, " in time: --- %s minutes run ---" %((time.time()-start_time)/60)        
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+#################################################################################################################################################
+# D) Workflow for finding Onsen-mapping reads with perfect or non-perfect match to ONSEN sequences 
+#################################################################################################################################################
+
+# Use python script to find 'perfect match' and 'no match' NGS reads to genome. 
+# Becuase the input is reads mapping to ONSEN, no match reads represent ONSEN reads with SNPs (i.e. 'non-perfect match' or 'unperfect match')
+
+#FILE:	MODIF_FINAL_ONSEN_Search_PERFECT_MATCH_Control_noBlackList.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+from Bio.Alphabet import IUPAC
+# File is 'MODIF' becuase it avoids Seq.record and packs data in memory
+
+start_time=time.time() # to tell de time it take to process
+
+# Path
+
+path = "~/PATH/" 
+path_genome = ""~/Reference_genomes/Arabidopsis/PATH/" # path to Arabidopsis genome
+
+# Files
+
+InputFasta_genome = "TAIR10_chr_all.fas"# fasta with Arabidopsis genome sequences
+InputFasta_reads = "Reads_SAMPLE_TAIR10_chr_all_maskedONSEN_Unmapped_mapONSEN.fasta" # fasta with the re-sequencing reads from SAMPLE, unmapped to masked genome and re-mapped to Onsen
+
+OutFasta_match = "FINAL_reads_PERFECT_MATCH_SAMPLE_noBlackList.fasta" # fasta outfile with the name/sequences of the reads with PERFECT matching sequences
+OutFasta_nomatch = "FINAL_reads_UNPERFECT_MATCH_SAMPLE_noBlackList.fasta" # fasta outfile with the name/sequences of the reads with NON-PERFECT matching sequences
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (pathy,filename):
+    
+    with open ("%s%s" %(pathy,filename), 'r') as myfile: # opens input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+################################################################################
+
+############
+### MAIN ###
+############
+              
+# Unpack genome in memory
+Genome_Dict = {} # dict with genome in memory 
+input_handle_genome = open("%s%s" %(path_genome,InputFasta_genome), "rU") # opens .fasta
+for record_genome in SeqIO.parse(input_handle_genome, "fasta"): # parse handle_input
+    Genome_Dict[record_genome.id] = str(record_genome.seq)
+input_handle_genome.close()  
+print "Unpacked genome sequences, in time: --- %s minutes run ---" %((time.time()-start_time)/60)   
+
+# Unpack reads in memory
+Reads_Dict = {} # dict with reads in memory 
+ID_List = [] # list with the record.id, to find the reads/mate with same name
+
+input_handle_reads = open("%s%s" %(path,InputFasta_reads), "rU") # opens .fasta
+for record_reads in SeqIO.parse(input_handle_reads, "fasta"): # parse handle_input
+    ID = str(record_reads.id)+'/1' # rename the reads for the read/mate having the same read_name but different sequence; this accounts for recovering reads with samtools where they loose their read/mate info
+    if ID in ID_List:
+        ID = str(record_reads.id)+'/2',
+    Reads_Dict[ID] = str(record_reads.seq)
+    ID_List.append(ID)
+input_handle_reads.close()  
+print "unpacked reads, in time: --- %s minutes run ---" %((time.time()-start_time)/60)   
+print len (Reads_Dict)
+
+# Match reads 
+count_match=0
+count_nomatch=0
+output_handle_match = open("%s%s" %(path,OutFasta_match), "w") # opens outfile with perfect match
+output_handle_nomatch = open("%s%s" %(path,OutFasta_nomatch), "w") # opens outfile with non-perfect match
+
+for record_input in Reads_Dict: # parse reads         
+    seq_input = Seq.Seq(Reads_Dict[record_input]) # seq_input is the sequence of the read
+    rev_seq_input = str(seq_input.reverse_complement())                                 
+                        
+    for record_target in Genome_Dict: # parse in genome                           
+        seq_target = Seq.Seq(Genome_Dict[record_target]) # seq_target is the sequence of the genome        
+            
+        # now test is the sequence of the read is in the genome
+        if seq_input in seq_target or rev_seq_input in seq_target:  
+            count_match+=1; print count_match, # print number of reads found so far
+            output_handle_match.write (">%s\n%s\n" %(record_input, seq_input)) # write read to output if its present in genome   
+            break
+
+    # after checking if it its present in any of the genome's chromosomes
+    else:
+        count_nomatch+=1;  
+        output_handle_nomatch.write (">%s\n%s\n" %(record_input, seq_input)) # write read to output when it is NOT present in genome
+                                 
+output_handle_match.close() 
+output_handle_nomatch.close()       
+print "/n"
+
+# Check outfiles 
+counts = CountLines (path_genome,InputFasta_genome); print "Fasta file with genome sequences: ", counts, " counts"  
+counts = CountLines (path,InputFasta_reads); print "Fasta file with re-sequencing reads: ", counts, " counts" 
+
+# END  
+print "Total reads match: ", count_match
+counts = CountLines (path,OutFasta_match); print "Fasta file with perfect match sequences: ", counts, " counts"  
+print "Total reads no-match: ", count_nomatch
+counts = CountLines (path,OutFasta_nomatch); print "Fasta file with non-perfect match sequences: ", counts, " counts"  
+print "Total reads match+no-match: ", count_nomatch+count_match
+print "Total time for process: --- %s minutes run ---" %((time.time()-start_time)/60)
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+#################################################################################################################################################
+# D) Workflow for finding NGS 'recombinant molecules' in ecDNA from heat-stressed samples
+#################################################################################################################################################
+
+#########
+STEP 1
+#########
+# Use python script to finding NGS reads with blunt_end in ONSEN LTR start sequence, diagnostic of linear blunt-ended ecDNA molecules 
+
+#FILE:	FINAL_UNPACKED_Search_blunt_end_ONSEN_Parse_3xfasta_search for sequences in fasta files_blunt_end_SMALL_EDGE.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+
+start_time=time.time() # to tell de time it take to process
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta0 = "small_blunt_edge.txt" # fasta file with the edge sequence shared across ONSEN members "TGTTGAAAGTTAAACTTGATT"
+InputFasta1 = "8 full lenght.fasta" # fasta file with the sequences of all ONSEN memebers 
+InputFasta2 = "Reads_SAMPLE_TAIR10_chr_all_maskedONSEN_Unmapped_mapONSEN.fasta" # fasta file with the sequencing reads (from Gaubert et al. (2017) Genetics)
+
+OutFasta = "SMALL_EDGE_Found_in_NGSreads_SAMPLE_TAIR10_chr_all_maskedONSEN_Unmapped_mapONSEN.fasta" # fasta outfile with the name/sequences of the reads with matching sequences  
+
+# Sequence border
+
+edge_F1 = "GTGTTGAA" # these are LTR edge sequence identical in all ONSEN members, with an extra base up-stream 
+edge_F2 = "ATGTTGAA"
+edge_F3 = "CTGTTGAA"
+edge_F4 = "TTGTTGAA"
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (filename):
+    
+    with open ("%s%s" %(path,filename), 'r') as myfile: # open input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+################################################################################
+
+############
+### MAIN ###
+############
+
+# Check files
+counts = CountLines (InputFasta0); print "Fist fasta with blunt seq: ", counts, " counts" 
+counts = CountLines (InputFasta1); print "Second fasta with the sequences of all genomic ONSENs: ", counts, " counts"  
+counts = CountLines (InputFasta2); print "Third fasta with NGS reads: ", counts, " counts"   
+              
+# Check if blunt is in genomic ONSEN, just in case
+input_handle_input = open("%s%s" %(path,InputFasta0), "rU")  # opens .fasta file
+for record_input in SeqIO.parse(input_handle_input, "fasta"):   
+    seq_input = str(record_input.seq)  
+    input_handle_a = open("%s%s" %(path,InputFasta1), "rU")  # opens .fasta file  
+    for record_genome in SeqIO.parse(input_handle_a, "fasta"):   
+            
+        seq_genome = str(record_genome.seq) 
+        rev_seq_genome = str(record_genome.seq.reverse_complement())
+     
+        if seq_input in seq_genome or seq_input in rev_seq_genome:
+            print record_input.id, " is a genomic sequence in ", record_genome.id       
+                       
+    input_handle_a.close() 
+input_handle_input.close()  
+print "checked if sequeces are in ONSEN, in time: --- %s minutes run ---" %((time.time()-start_time)/60)   
+
+# Unpack sequencing data
+Sequencing_Dict = {} # dict with NGS reads
+input_handle = open("%s%s" %(path,InputFasta2), "rU")  # opens .fasta file
+for record_search in SeqIO.parse(input_handle, "fasta"):
+    Sequencing_Dict [record_search.id] = str(record_search.seq)               
+input_handle.close() 
+print "Sequencing data unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60)
+
+# Match 
+List_Reads = [] # to append reads and avoid reporting again
+count=0
+
+input_handle_input = open("%s%s" %(path,InputFasta0), "rU")  # opens .fastq file
+output_handle = open("%s%s" %(path,OutFasta), "w")           # opens outfile to be written
+
+for record_input in SeqIO.parse(input_handle_input, "fasta"):      
+    #print record_input.id,
+    seq_input = str(record_input.seq)
+
+    for record_search in Sequencing_Dict: 
+                    
+        seq_target = str(Sequencing_Dict [record_search]) 
+        if record_search not in List_Reads:
+
+	    # rules out reads with up-stream bases
+            if edge_F1 not in seq_target and edge_F2 not in seq_target and edge_F3 not in seq_target and edge_F4 not in seq_target: 
+                if seq_input in seq_target:
+                    List_Reads.append (record_search)
+                    count=count+1; 
+                    output_handle.write(">%s\n%s\n" %(record_search,seq_target)) # write to outfile
+    
+input_handle_input.close()
+output_handle.close() 
+      
+# END  
+print "Total reads matching: ", count, " in time: --- %s minutes run ---" %((time.time()-start_time)/60)        
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#########
+STEP 2
+#########
+# Retrieve read/mate pairs from the previous NGS reads, representing resequenced NGS 'molecules' where the read maps to the blunt-end beggining of ONSEN LTR
+# First, recover a list of the edge reads, and then retrive the paired read/mate from a mapping file
+
+# Use python script to recover the list of previous NGS reads 
+
+#FILE:	Recover_LIST_ReadMates_from_SMALL_EDGE_Found_in_NGSreads.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+
+start_time=time.time() # to tell the time it take to process
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta0 = "SMALL_EDGE_Found_in_NGSreads_SAMPLE_TAIR10_chr_all_maskedONSEN_Unmapped_mapONSEN.fasta" # fasta with the edge reads
+
+OutList = "List_from_SMALL_EDGE_Found_in_NGSreads_SAMPLE.txt" # this is oufile list
+
+################################################################################
+###define CountLines fx to count the lines in the file 
+################################################################################
+def CountLines (filename):
+    
+    with open ("%s%s" %(path,filename), 'r') as myfile: # open input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+################################################################################
+
+############
+### MAIN ###
+############
+
+# Check file
+counts = CountLines (InputFasta0); print "fist search_blunt_reads.txt with blunt seq: ", counts, " counts" 
+       
+# Parse file       
+input_handle_input = open("%s%s" %(path,InputFasta0), "rU") # opens .fasta file
+output_handle = open("%s%s" %(path,OutList), "w") # opens outfile to be written
+
+for record_input in SeqIO.parse(input_handle_input, "fasta"):      
+    name_input = str(record_input.id)
+    output_handle.write("%s\n" %(name_input))
+    
+input_handle_input.close()
+output_handle.close() 
+      
+# END
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Sort list and mapping file 
+
+$sort List_from_SMALL_EDGE_Found_in_NGSreads_SAMPLE.txt -o List_from_SMALL_EDGE_Found_in_NGSreads_SAMPLE_sorted.txt
+
+$java -jar ~/PATH/picard-tools-1.103/SortSam.jar \
+INPUT=SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted.bam \
+OUTPUT=SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.bam \
+SORT_ORDER=queryname &
+
+# Recover paired-end read/mate
+
+$java -jar ~/PATH/picard-tools-1.103/FilterSamReads.jar \
+INPUT=SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.bam \
+OUTPUT=SELECTED_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.bam \
+READ_LIST_FILE=List_from_SMALL_EDGE_Found_in_NGSreads_SAMPLE_sorted.txt \
+FILTER=includeReadList \
+SORT_ORDER=queryname \
+WRITE_READS_FILES=false &
+
+# Generate .fasta from resulting .bam
+
+$bedtools bamtofastq -i SELECTED_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.bam \
+-fq SELECTED_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.fastq &
+
+$awk 'BEGIN{P=1}{if(P==1||P==2){gsub(/^[@]/,">");print}; if(P==4)P=0; P++}' SELECTED_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.fastq \
+> SELECTED_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.fasta &
+
+#########
+STEP 3
+#########
+# Asses the parent of origin from the recovered paired read/mate, to retrieve recombinant 'NGS molecules'.
+# Note that since string matching is used for this, the resulting paired read/mate are perfect matching sequences to ONSEN (non-perfect matching sequences will not be evaluated)
+# First, recover 'NGS molecules' with read and mate having long read size, avoiding short reads (>146 bp). Then, retrive paired read/mate
+# with different ONSEN parent-of-origin. Then, flag name of read/mate according to 5prime origin (blunt-end) or 3prime origin (mate).
+# Finally, 
+
+# Use python script to select molecules according to read/mate size (this step can be avoided, as I introduced in the following scripts a
+# size cut-off; however, this step was part of the original worflow.
+
+#FILE:	1_Select_for_size_from_blunt_end_reads.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+
+start_time=time.time() # to tell the time it take to process
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta2 = "SELECTED_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.fasta" # fasta with the sequencing NGS reads
+OutFasta = "SELECTED_SIZE_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.fasta" # outfile with the name/sequences of the reads with more than 146 bp
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (filename):
+    
+    with open ("%s%s" %(path,filename), 'r') as myfile:                        #open the input tab-file with gene exppression  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+################################################################################
+
+############
+### MAIN ###
+############
+
+# Check file
+counts = CountLines (InputFasta2); print "Fasta with NGS reads: ", counts, " counts"   
+              
+# Generates black list
+Black_list = [] # list to keep names of small reads
+input_handle = open("%s%s" %(path,InputFasta2), "rU") # opens .fasta file
+for record_search in SeqIO.parse(input_handle, "fasta"): # parse fasta
+    if len(record_search.seq)<147:
+        Black_list.append(record_search.id) # flag the read name with small read; NOTE: this works for .fasta with read/mate having the same name!
+input_handle.close()         
+   
+# Write output
+input_handle = open("%s%s" %(path,InputFasta2), "rU") # opens .fasta file
+output_handle = open("%s%s" %(path,OutFasta), "w") # opens outfile to be written
+
+for new_record_search in SeqIO.parse(input_handle, "fasta"):     
+    if new_record_search.id not in Black_list:          
+        output_handle.write(">%s\n%s\n" %(new_record_search.id,new_record_search.seq)) # write long read/mate pairs to output
+                    
+input_handle.close() 
+output_handle.close() 
+      
+### END  
+counts = CountLines (OutFasta); print "OutFasta file: ", counts, " counts" 
+print "Size selection in time: --- %s minutes run ---" %((time.time()-start_time)/60)      
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Use phyton script to sort out recombinant 'molecules' based on paired read/mate with different ONSEN parent-of-origin
+# The script will report only NGS pair-end cases in which the origin of 5' read must be different than 3' mate, reflecting recombinant NGS molecules 
+# The outfile .fasta will display the parent of origin within the read names, this is deconvoluted later
+
+#FILE: 2_ONSEN_split_PAIR_END_Search_recombinations_in_blunt_end_reads_SIZE.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+import multiprocessing # in case of neccesity
+
+#THREADS = 6 # number of cores to parelelize analisys in case of necesity
+
+start_time=time.time() # to tell the time it takes to process 
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta_Genome = "8 full lenght_bothLTR_modif.txt" # fasta with sequences of genomic ONSEN's LTRs (both 5' and 3' LTRs from old ONSEN members when dissimilar). I did not include AT1G21945 as it doesnt recombine.
+InputFasta_NGS = "SELECTED_SIZE_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.fasta" # fasta with the NGS pairs read/mate
+
+OutFasta_Reads = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_nrpd1_heat_merged_BOTHLTRs.fasta"  ### fasta file with paired read/mates with differnt parent-of-origin
+
+################################################################################
+###define CountLines fx to count the lines of a file 
+################################################################################
+def CountLines (pathy,filename):
+    
+    with open ("%s%s" %(pathy,filename), 'r') as myfile: # open input file 
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+################################################################################
+### Define Busqueda fx for the string matching, possible to paralelize
+################################################################################
+def Busqueda (key_value): # data in dictionary enters as a tuple (key,value) from NGS_foward_Dict   
+    Tuple_List = [] 
+    store_genome_record_foward=[] # appends hits for the read 'foward' in NGS_foward_Dict
+    store_genome_record_reverse=[] # appends hits for the mate 'reverse' in NGS_reverse_Dict
+    Final_count = 0
+    
+    item_foward_ID = str(key_value[0]) # key_value[0] is the name of the foward read
+    item_foward_seq = Seq.Seq(key_value[1]) # makes sequence of the foward read in NGS_foward_Dict and its reverse complement
+    rev_item_foward_seq = str(item_foward_seq.reverse_complement())
+    if item_foward_ID in NGS_reverse_Dict: # this proceeds only if there is a mate in NGS_reverse_Dict                
+        
+        # search the hits for the read 'foward'
+        for record_genome in Genome_Dict:                                       
+            seq_genome = Seq.Seq(str(Genome_Dict[record_genome])) # recovers sequence of ONSEN LTR
+            
+            if item_foward_seq in seq_genome or rev_item_foward_seq in seq_genome:
+                store_genome_record_foward.append(record_genome) # saves LTR record having a hit for NGS_foward_Dict
+        
+        # now search the hits for mate 'reverse'
+        item_reverse_seq = Seq.Seq(NGS_reverse_Dict[item_foward_ID]) # finds sequence of mate in NGS_reverse_Dict and reverse complement 
+        rev_item_reverse_seq = str(item_reverse_seq.reverse_complement())
+            
+        for record_genome in Genome_Dict:                                       
+            seq_genome = Seq.Seq(str(Genome_Dict[record_genome])) # recovers sequence of ONSEN LTR
+            
+            if item_reverse_seq in seq_genome or rev_item_reverse_seq in seq_genome:
+                store_genome_record_reverse.append(record_genome)  
+            
+        if len(store_genome_record_foward) !=0 and len(store_genome_record_reverse) !=0: # if both foward and reverse list display hits
+            Final_count=sum(1 for x in store_genome_record_foward if x in store_genome_record_reverse)  # check that foward and reverse hist are NOT SHARE
+	    # When foward and reverse hist are not the same, Final_count == 0; hence NGS molecule must have different parent-of-origin. 
+            if Final_count == 0: 
+                Tuple_List.append ((item_foward_ID, NGS_foward_Dict[item_foward_ID], store_genome_record_foward, NGS_reverse_Dict[item_foward_ID],store_genome_record_reverse)
+                                                                                                                                                  
+    return Tuple_List # returns [] if there was no match. This is handled later with a Final_List.extend() 
+################################################################################
+
+############
+### MAIN ###
+############
+
+# Check files 
+counts = CountLines (path,InputFasta_Genome); print "Fasta file with genomic sequences: ", counts, " counts"  
+counts = CountLines (path,InputFasta_NGS); print "Fasta file with NGS re-sequencing reads: ", counts, " counts"   
+              
+# Unpack ONSEN genomic LTRs
+Genome_Dict ={} # Dict with genomic sequences
+input_handle_genome = open("%s%s" %(path,InputFasta_Genome), "rU") # opens .fasta file 
+for genome_item in SeqIO.parse(input_handle_genome, "fasta"):
+        Genome_Dict[genome_item.id] = str(genome_item.seq)
+input_handle_genome.close()
+print "Genome sequences unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60) 
+
+# Unpack NGS data
+NGS_foward_Dict ={} # Dict with NGS sequences reads
+NGS_reverse_Dict ={} # Dict with NGS sequences mates
+ID_List = [] # list stores record.id, to find the reads/mate with same name
+
+input_handle_NGS = open("%s%s" %(path,InputFasta_NGS), "rU") # opens .fasta file 
+for NGS_item in SeqIO.parse(input_handle_NGS, "fasta"):
+    # automatic size selection, just in case    
+    if len(NGS_item.seq)>146:
+        # Instead of renaming reads, the read/mate pairs with same name are stored in different dict, this accounts for recovering reads with samtools   
+        if str(NGS_item.id) in ID_List:       
+            NGS_reverse_Dict[str(NGS_item.id)] = str(NGS_item.seq)
+        else: 
+            NGS_foward_Dict[str(NGS_item.id)] = str(NGS_item.seq)        
+        ID_List.append(str(NGS_item.id))
+input_handle_NGS.close()
+
+print len (NGS_foward_Dict), "is the number of NGS foward reads"
+print len (NGS_reverse_Dict), "is the number of NGS reverse mates"
+print "NGS data unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60)    
+
+# Perform the string matching, this step can be paralellized
+Final_List = []                                 
+Dummy_List = map(Busqueda, NGS_foward_Dict.items()) # .items() of a dict generates a list of tuples (key,value)              
+for items in Dummy_List: Final_List.extend(items) # transforms list of list of tuples in list of tuples      
+print len (Final_List),"is number of redundant sequences in Final List"
+print "Paralelized and Final List generated in time: --- %s minutes run ---" %((time.time()-start_time)/60)                                                               
+        
+# Write the recombinations found 
+output_handle_Reads = open("%s%s" %(path,OutFasta_Reads), "w") # open outfile to be written
+
+for tuple_item in Final_List: # Final_list is a redundant list of tuples
+    Foward_ID, Foward_seq, Genome_ID_foward, Reverse_seq, Genome_ID_reverse = str(tuple_item[0]), str(tuple_item[1]), str(tuple_item[2]),str(tuple_item[3]), str(tuple_item[4])  # unpack the tuple   
+    output_handle_Reads.write (">%s~%s\n%s\n>%s~%s\n%s\n" %(Foward_ID, Genome_ID_foward, Foward_seq,Foward_ID, Genome_ID_reverse, Reverse_seq )) ### write to output   
+             
+output_handle_Reads.close() 
+      
+# END
+counts = CountLines (path,OutFasta_Reads); print "Outfile with # NGS pairs: ", counts/2, " recombinant counts"       
+print "Total NGS reads match in time: --- %s minutes run ---" %((time.time()-start_time)/60)         
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Use phyton script to flag paired read/mate from recombinant NGS molecules according to 5prime (blunt-end) or 3' (mate) origin 
+# The outfile .fasta will change the names reflecting the flag
+
+#FILE: 3_Rename_ONSEN_split_PAIR_END_to_flag_5prime_end_or_3prime_end_SIZE.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+
+start_time=time.time() # to tell the time it takes to process 
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta_NGS = "SMALL_EDGE_Found_in_NGSreads_SAMPLE_TAIR10_chr_all_maskedONSEN_Unmapped_mapONSEN.fasta" # fasta with the original NGS reads
+InputFasta_Recovered = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_SAMPLE_BOTHLTRs.fasta" # fasta with the selected NGS reads
+
+OutFasta_Reads = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_Col0_heat_BOTHLTRs_MODIF.fasta" # outfile fasta where read/mates names have been flagged for 5prime end (blunt_end) and 3prime end (mate)
+
+################################################################################
+###define CountLines fx to count lines of a file 
+################################################################################
+def CountLines (pathy,filename):
+    
+    with open ("%s%s" %(pathy,filename), 'r') as myfile: # open input file  
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+################################################################################
+
+############
+### MAIN ###
+############
+
+# Check files 
+counts = CountLines (path,InputFasta_NGS); print "Fasta file with NGS reads: ", counts, " counts"   
+counts = CountLines (path,InputFasta_Recovered); print "Fasta file with recovered pairs: ", counts, " counts" 
+              
+# Unpack recovered input fasta
+        
+input_handle_Recovered = open("%s%s" %(path,InputFasta_Recovered), "rU") # opens .fasta file 
+
+output_handle_Reads = open("%s%s" %(path,OutFasta_Reads), "w") # opens outfile to be written
+
+for line in input_handle_Recovered:
+      if line.startswith(">"):
+          
+          Recovered_name = line.strip("\n").strip(">")
+          next_line = input_handle_Recovered.next()
+          Recovered_seq = next_line.strip("\n")  
+  
+          input_handle_NGS = open("%s%s" %(path,InputFasta_NGS), "rU") # opens .fasta file
+          
+          for NGS_item in SeqIO.parse(input_handle_NGS, "fasta"): 
+    
+            if NGS_item.id in Recovered_name:
+            
+                if NGS_item.seq == Recovered_seq:
+                    # handle change of name
+                    Old_name = str(Recovered_name).split("~")
+                    new_ID = str(Old_name[0])+"_5prime"
+                    output_handle_Reads.write (">%s~%s\n%s\n" %(new_ID, str(Old_name[1]), str(Recovered_seq))) # write to output   
+             
+                else:
+                    Old_name = str(Recovered_name).split("~")
+                    new_ID = str(Old_name[0])+"_3prime"
+                    output_handle_Reads.write (">%s~%s\n%s\n" %(new_ID, str(Old_name[1]), str(Recovered_seq))) # write to output
+          input_handle_NGS.close()
+             
+output_handle_Reads.close() 
+input_handle_Recovered.close() 
+      
+### End  
+counts = CountLines (path,OutFasta_Reads); print "Outfile with # NGS pairs: ", counts/2, " recombinant counts"      
+print "Total NGS reads match in time: --- %s minutes run ---" %((time.time()-start_time)/60)        
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Use phyton script to flag paired read/mate from recombinant NGS molecules according to 5prime (blunt-end) or 3' (mate) origin 
+# The outfile .fasta will display the parent of origin within the read names, this is deconvoluted later
+
+#FILE: 4_ASSIGN_LTR_ONSEN_to_recombination_moleculaes_in_blunt_end_NGS_perfect_match_reads_TEST3_SIZE.py
+
+#Script:
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+
+
+
+
