@@ -1,26 +1,26 @@
 ###
 # DISCLAIMER:
 # These were the workflows for solving several bioinformatic analysis for Sanchez et al. (2017) Nat Comm.
-# It used standart open-source softwares in linux command-line, and custom-made phyton scripts (I kept here the original names of the phyton script's files to match my records)
-# It also involved some manual organization of files, manual assesment of results and manual processing to reach final result (e.g.sequence reconstruction).
-# Although it solved the problems faced at the time, note that this is a begginner's code, as I'm not a professional bioinformatician or data scientist.
+# I used standard open-source software in Linux command-line, and custom-made python scripts (I kept here the original names of the python script's files to match my records)
+# It also involved some manual organization of files, manual assessment of results and manual processing to reach final result (e.g.sequence reconstruction).
+# Although it solved the problems faced at the time, note that this is a beginner's code, as I'm not a professional bioinformatician or data scientist.
 # As such, it may probably look overly complicated; and other more advanced solutions are likely simpler or more effective.
 # The workflow also display some historical contingencies, as I was learning while doing.
-# None of this work would be possible without the colaboration with Herve Gaubert, 
+# None of this work would be possible without the collaboration with Herve Gaubert, 
 # and the kind bioinformatics support of Varodom Charoensawan, Hugo Tavares, Jeremy Gruel, Hajk-Georg Drost, Anna Gogleva and Yassin Refahi. 
 #
 # Diego H. Sanchez (diego.sanchez@slcu.cam.ac.uk)
 ###
 
 #################################################################################################################################################
-# A) Workflow for LTR reconstruction of ONSEN insertions in nrpd1-3 (example for nrpd1 2L plant from Gubert. et al, 2017)
+# A) Workflow for LTR reconstruction of ONSEN insertions in nrpd1-3 (example for nrpd1 2L plant from Gubert. et al, (2017))
 #################################################################################################################################################
 
 #########
 STEP 1
 #########
-# Use python script to extend areas around insertion poins 1000 bp (since mean library fragmant size was around ~350 bp, I estimated that 1000 bp would recover all possible informative reads)
-# For this I input a .txt file with genomic coordinates of insertions from data reported in Gaubert et al. (2017) Genetics (chromosome, start, end; file name:input_2L.txt) 
+# Use python script to extend areas around insertion poins 1000 bp (since mean library fragment size was around 350 bp, I estimated that 1000 bp would recover all possible informative reads)
+# For this I input a .txt file with genomic coordinates of insertions from data reported in Gaubert et al. (2017) Genetics (chromosome, start, end; in my records file name:input_2L.txt) 
 
 #FILE:	input text extend strands and generates new bed.py
 
@@ -279,7 +279,7 @@ for record in input_handle_bed:
     output_handle_right.close()
     print "number of output in fasta Files is: ", count
                                                         
-### END  
+# END  
 print "Process time required: --- %s minutes run ---" %((time.time()-start_time)/60)  
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -291,13 +291,14 @@ STEP 3
 
 
 #################################################################################################################################################
-# B) Workflow for estimating transcript levels with specific sequence 'adresses', from RNAseq data
+# B) Workflow for estimating transcript levels with specific sequence 'adresses', from RNA-seq data
 #################################################################################################################################################
 
 #########
 STEP 1
 #########
-# Use python workflow to recover NGS reads mapping to the genes of interest or ONSEN. Example is shown for housekeeping genes and stress genes.
+# Use python workflow to recover NGS reads mapping to the genes of interest or ONSEN.
+# Example is shown for housekeeping genes and stress genes.
 # For this I used a .bed file with genomic coordinates and the function samtools view, on the TopHat mapping file .bam for each sample 
 
 #FILE:	Workflow_recover_reads_TOPHAT_DUPLICATED_housekeepingANDstress_genes_SAMPLE.py
@@ -477,7 +478,8 @@ print "Total NGS reads match in time: --- %s minutes run ---" %((time.time()-sta
 #########
 STEP 3
 #########
-# Manually generate a list of count per gene across samples and normalize to TopHat non-deduplicated mapped library size
+# Manually generate a list of counts per gene across samples and normalize to TopHat non-deduplicated mapped library size
+# Similar workflow was used with recovered ONSEN-mapping DNA sequencing data to infer ecDNA signals
 
 
 
@@ -1238,7 +1240,7 @@ for new_record_search in SeqIO.parse(input_handle, "fasta"):
 input_handle.close() 
 output_handle.close() 
       
-### END  
+# END  
 counts = CountLines (OutFasta); print "OutFasta file: ", counts, " counts" 
 print "Size selection in time: --- %s minutes run ---" %((time.time()-start_time)/60)      
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1267,10 +1269,10 @@ path = "~/PATH/"
 
 # Files
 
-InputFasta_Genome = "8 full lenght_bothLTR_modif.txt" # fasta with sequences of genomic ONSEN's LTRs (both 5' and 3' LTRs from old ONSEN members when dissimilar). I did not include AT1G21945 as it doesnt recombine.
+InputFasta_Genome = "8 full lenght_bothLTR_modif.txt" # fasta with sequences of genomic ONSEN's LTRs (both 5' and 3' LTRs from old ONSEN members when dissimilar). 
 InputFasta_NGS = "SELECTED_SIZE_ReadyMate_SAMPLE_trimmo_paired_bowtie2_verysensitive_TAIR10_chr_all_maskedONSEN_sorted_BYNAME.fasta" # fasta with the NGS pairs read/mate
 
-OutFasta_Reads = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_nrpd1_heat_merged_BOTHLTRs.fasta"  ### fasta file with paired read/mates with differnt parent-of-origin
+OutFasta_Reads = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_SAMPLE_BOTHLTRs.fasta"  ### fasta file with paired read/mates with differnt parent-of-origin
 
 ################################################################################
 ###define CountLines fx to count the lines of a file 
@@ -1379,7 +1381,7 @@ print "Total NGS reads match in time: --- %s minutes run ---" %((time.time()-sta
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # Use phyton script to flag paired read/mate from recombinant NGS molecules according to 5prime (blunt-end) or 3' (mate) origin 
-# The outfile .fasta will change the names reflecting the flag
+# The outfile .fasta will change the names reflecting the flag; this is deconvoluted later for reporting
 
 #FILE: 3_Rename_ONSEN_split_PAIR_END_to_flag_5prime_end_or_3prime_end_SIZE.py
 
@@ -1401,7 +1403,7 @@ path = "~/PATH/"
 InputFasta_NGS = "SMALL_EDGE_Found_in_NGSreads_SAMPLE_TAIR10_chr_all_maskedONSEN_Unmapped_mapONSEN.fasta" # fasta with the original NGS reads
 InputFasta_Recovered = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_SAMPLE_BOTHLTRs.fasta" # fasta with the selected NGS reads
 
-OutFasta_Reads = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_Col0_heat_BOTHLTRs_MODIF.fasta" # outfile fasta where read/mates names have been flagged for 5prime end (blunt_end) and 3prime end (mate)
+OutFasta_Reads = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_SAMPLE_BOTHLTRs_MODIF.fasta" # outfile fasta where read/mates names have been flagged for 5prime end (blunt_end) and 3prime end (mate)
 
 ################################################################################
 ###define CountLines fx to count lines of a file 
@@ -1455,18 +1457,135 @@ for line in input_handle_Recovered:
 output_handle_Reads.close() 
 input_handle_Recovered.close() 
       
-### End  
+# END  
 counts = CountLines (path,OutFasta_Reads); print "Outfile with # NGS pairs: ", counts/2, " recombinant counts"      
 print "Total NGS reads match in time: --- %s minutes run ---" %((time.time()-start_time)/60)        
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# Use phyton script to flag paired read/mate from recombinant NGS molecules according to 5prime (blunt-end) or 3' (mate) origin 
-# The outfile .fasta will display the parent of origin within the read names, this is deconvoluted later
+# Use phyton script to report recombinant NGS molecules 5prime and 3prime origin 
+# The script will report the result in the shell
 
 #FILE: 4_ASSIGN_LTR_ONSEN_to_recombination_moleculaes_in_blunt_end_NGS_perfect_match_reads_TEST3_SIZE.py
 
 #Script:
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import time
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio import Seq
+from collections import Counter
+from operator import itemgetter
+
+start_time=time.time() # to tell the time it take to process 
+
+# Path
+
+path = "~/PATH/" 
+
+# Files
+
+InputFasta_NGS = "RecombinantREADyMATE_SIZE_pairs_found_in_pair_end_SELECTED_ReadyMate_SAMPLE_BOTHLTRs_MODIF.fasta" # .fasta with selected NGS reads
+
+################################################################################
+###define CountLines fx to count the lines a the file 
+################################################################################
+def CountLines (pathy,filename):
+    
+    with open ("%s%s" %(pathy,filename), 'r') as myfile: # open input file 
+        count=sum(1 for line in myfile if line.startswith(">"))       
+    return count   
+################################################################################
+
+############
+### MAIN ###
+############
+
+# Check file 
+counts = CountLines (path,InputFasta_NGS); print "Fasta file with NGS: ", counts, " counts"   
+              
+# Extract NGS_read name and list of origin within it
+# Idea here was to generate a tuple of tuples, each containing a 5' and 3' tuple for each particular pair of READ/MATE
+Origin_List = []          
+input_handle_NGS = open("%s%s" %(path,InputFasta_NGS), "rU") # opens .fasta file. I didnt use Biophython cause number of characters supported is not enought to contain the NGS_reads_ID+List of origin 
+for line in input_handle_NGS:
+    if line.startswith(">"):
+            NGS_item = line.strip("\n").split("~")
+            NGS_item_ID = NGS_item[0]
+            NGS_item_origin = str(NGS_item[1])
+            NGS_item_sequence = input_handle_NGS.next() # Once unpacked the line, it moves to the next to get mate's data
+                                                       
+            if '5prime' in NGS_item_ID: # Append first list 5prime and then list 3prime, which is in the next line        
+                Foward_origin = NGS_item_origin
+                next_line = input_handle_NGS.next()
+                if next_line.startswith(">"):
+                    next_NGS_item = next_line.strip("\n").split("~")
+                    next_NGS_item_ID = next_NGS_item[0]
+                    next_NGS_item_origin = str(next_NGS_item[1])
+                    next_NGS_item_sequence = input_handle_NGS.next() 
+                    if '3prime' not in next_NGS_item_ID: # Break loop in case there is no correct mate
+                        print "ERROR next 3prime"
+                        break   
+                                         
+                    Reverse_origin = next_NGS_item_origin
+                    
+                    Origin_List.append(Foward_origin+Reverse_origin) 
+                else:
+                    print "ERROR next 5line" # Break loop in case there is no correct mate
+                    print next_NGS_item_ID
+                    break
+            
+            if '3prime' in NGS_item_ID: # Append first list 5prime and then list 3prime, which is in the next line        
+                Reverse_origin = NGS_item_origin
+                next_line = input_handle_NGS.next()
+                if next_line.startswith(">"):
+                    next_NGS_item = next_line.strip("\n").split("~")
+                    next_NGS_item_ID = next_NGS_item[0]
+                    next_NGS_item_origin = str(next_NGS_item[1])
+                    next_NGS_item_sequence = input_handle_NGS.next() 
+                    if '5prime' not in next_NGS_item_ID: # Break loop in case there is no correct mate
+                        print "ERROR next 5prime"
+                        break   
+                     
+                    Foward_origin = next_NGS_item_origin
+                    
+                    Origin_List.append(Foward_origin+Reverse_origin) 
+                else:
+                    print "ERROR next 3line" # Break loop in case there is no correct mate
+                    print next_NGS_item_ID
+                    break
+                                              
+input_handle_NGS.close()
+
+Origin_Tuple = tuple(Origin_List)
+
+print "number of READS/MATES:", len (Origin_Tuple)
+print "NGS data unpacked in time: --- %s minutes run ---" %((time.time()-start_time)/60)    
+
+# Report count
+print "Report READS/MATES"
+for item,count in Counter(Origin_Tuple).iteritems(): # Recover frecuency 
+    print '%s: %d' % (item, count)
+
+# END  
+print "Total NGS reads match in time: --- %s minutes run ---" %((time.time()-start_time)/60)     
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+# Python scripts used before (2_ONSEN_split, 3_Rename and 4_ASSIGN) were minimally modified to report the "Non-discriminatory molecules", 
+# ocurring in the same data set. Available upon request (in my records are 2next_ONSEN_split, 3next_Rename and 4next_ASSIGN)
+
+
+
+#################################################################################################################################################
+# E) Workflow for assesing NGS errors with virtual library
+#################################################################################################################################################
+  
+
+
+
+
+
+
+
 
 
 
